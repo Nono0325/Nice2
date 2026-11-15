@@ -266,15 +266,21 @@
               <span class="card-title">🕹️ 手動寸動控制台 (Jog)</span>
             </div>
 
-            <!-- 寸動步長選擇 -->
+            <!-- 單步步長 (mm) - 支援手打輸入與快捷按鈕 -->
             <div class="control-row">
               <span class="control-label">單步步長:</span>
-              <div class="pill-group">
-                <button v-for="step in [0.1, 1.0, 5.0, 10.0, 50.0, 100.0]" :key="step"
-                        class="pill-btn" :class="{ active: jogDistance === step }"
-                        @click="jogDistance = step">
-                  {{ step }} mm
-                </button>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 4px;">
+                  <input type="number" step="any" min="0.01" max="600" v-model.number="jogDistance" class="form-control" style="width: 80px; text-align: center; padding: 6px 8px; font-weight: 700;">
+                  <span style="font-weight: 700; color: #38bdf8; font-size: 13px;">mm</span>
+                </div>
+                <div class="pill-group" style="margin-left: 6px;">
+                  <button v-for="step in [0.1, 1.0, 5.0, 10.0, 50.0, 100.0]" :key="step"
+                          class="pill-btn" :class="{ active: Number(jogDistance) === step }"
+                          @click="jogDistance = step">
+                    {{ step }} mm
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -288,7 +294,7 @@
                 </div>
                 <div class="pill-group" style="margin-left: 6px;">
                   <button v-for="spd in [5, 15, 30, 50, 80, 100]" :key="spd"
-                          class="pill-btn" :class="{ active: jogSpeed === spd }"
+                          class="pill-btn" :class="{ active: Number(jogSpeed) === spd }"
                           @click="jogSpeed = spd">
                     {{ spd }} mm/s
                   </button>
@@ -949,7 +955,7 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=2.2.0"></script>
+  <script src="/static/js/app.js?v=2.3.0"></script>
 </body>
 </html>
 

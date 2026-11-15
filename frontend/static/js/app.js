@@ -122,7 +122,7 @@ createApp({
 
     // --- API 呼叫 ---
     const sendJog = async (axis, dir) => {
-      const dist = parseFloat(jogDistance.value);
+      const dist = Math.max(0.01, parseFloat(jogDistance.value) || 1.0);
       const speed = Math.max(1.0, parseFloat(jogSpeed.value) || 20.0);
       try {
         const res = await fetch('/api/jog', {
