@@ -147,13 +147,14 @@ createApp({
       try {
         const x = parseFloat(customTargetX.value);
         const z = parseFloat(customTargetZ.value);
+        const speed = Math.max(1.0, parseFloat(jogSpeed.value) || 20.0);
         const res = await fetch('/api/move_to', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x, z })
+          body: JSON.stringify({ x, z, speed })
         });
         if (!res.ok) throw new Error('定位指令拒絕');
-        addLog(`目標定位開始: X=${x}mm, Z=${z}mm`, 'info');
+        addLog(`目標定位開始: X=${x}mm, Z=${z}mm (指定速度=${speed}mm/s)`, 'info');
       } catch (err) {
         addLog(`定位錯誤: ${err.message}`, 'err');
       }

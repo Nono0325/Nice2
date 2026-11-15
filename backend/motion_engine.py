@@ -128,6 +128,7 @@ class MotionEngine:
 
         delta = direction * abs(distance_mm)
         axis = axis.upper()
+        logger.info(f"啟動 {axis} 軸寸動: 位移={delta:+.2f}mm, 設定速度={speed_mm_s} mm/s")
         
         def run_jog():
             self.state = "MOVING"
@@ -162,6 +163,8 @@ class MotionEngine:
             return False
         if self.motor_x.is_moving or self.motor_z.is_moving:
             return False
+
+        logger.info(f"啟動絕對座標定位: X={x}mm, Z={z}mm, 設定速度={speed} mm/s")
 
         def run_move():
             self.state = "MOVING"

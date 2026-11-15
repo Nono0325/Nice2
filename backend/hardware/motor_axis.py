@@ -110,6 +110,7 @@ class MotorAxis:
         max_step_rate = max_speed * self.cfg.steps_per_mm
         accel_step_rate = self.cfg.accel_mm_s2 * self.cfg.steps_per_mm
         min_step_rate = 50.0  # 起步頻率 50 steps/s
+        logger.info(f"[{self.cfg.name}] 開始運轉: 目標={target_mm:.2f}mm, 總步數={delta_steps}, 執行速度={max_speed:.1f}mm/s (硬體上限={self.cfg.max_speed_mm_s}mm/s)")
 
         # 設定方向引腳
         dir_val = 1 if (direction > 0) else 0
@@ -155,10 +156,11 @@ class MotorAxis:
                     time.sleep(0.005) # 模擬模式快速流暢
                 completed = (step_count == total_steps)
             else:
-                # 真實樹梅派模式：逐步脈衝產生
+                # 真實樹梅派模式：逐步脈衝產生 (高精度微秒級混合定時器)
                 # HBS57H / HB808C 脈衝高低電平脈寬最小需求 > 2.5us
                 pul_pin = self.cfg.pul_pin
                 write_gpio = self.gpio.write_pin
+                next_step_time = time.perf_counter()
 
                 while step_count < total_steps:
                     if self.abort_requested:
@@ -179,17 +181,28 @@ class MotorAxis:
                         current_step_rate = max_step_rate
 
                     interval = 1.0 / max(50.0, current_step_rate)
-                    half_interval = interval / 2.0
+                    next_step_time += interval
 
-                    # 輸出一個脈衝
+                    # 輸出脈衝信號 (高電平持續 > 2.5us)
                     write_gpio(pul_pin, 1)
-                    time.sleep(max(0.000005, half_interval))
+                    t_pulse = time.perf_counter() + 0.000005
+                    while time.perf_counter() < t_pulse:
+                        pass
                     write_gpio(pul_pin, 0)
-                    time.sleep(max(0.000005, half_interval))
+
+                    # 高精度無漂移混合定時：若間隔較大 (>1.5ms) 讓出 CPU，其餘採用 spin-wait 消除內核調度抖動
+                    rem = next_step_time - time.perf_counter()
+                    if rem > 0.0015:
+                        time.sleep(rem - 0.001)
+                    while time.perf_counter() < next_step_time:
+                        pass
+
+                    # 若因系統重大中斷導致時間大幅落後，重置基準防止連發衝擊
+                    if time.perf_counter() - next_step_time > 0.05:
+                        next_step_time = time.perf_counter()
 
                     step_count += 1
-                    with self._lock:
-                        self.position_steps += direction
+                    self.position_steps += direction
 
                 completed = (step_count == total_steps)
 

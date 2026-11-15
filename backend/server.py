@@ -25,6 +25,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 # 核心業務控制器
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 motion_engine = MotionEngine(config_mgr)
@@ -92,13 +100,15 @@ def get_status():
 
 @app.post("/api/jog")
 def jog(req: JogRequest):
+    logger.info(f"收到寸動請求: 軸向={req.axis}, 方向={req.direction}, 距離={req.distance}mm, 速度={req.speed}mm/s")
     success = motion_engine.jog(req.axis, req.direction, req.distance, req.speed)
     if not success:
         raise HTTPException(status_code=400, detail="無法執行寸動 (可能正在運轉或處於警報態)")
-    return {"status": "ok", "message": f"{req.axis}軸寸動已啟動"}
+    return {"status": "ok", "message": f"{req.axis}軸寸動已啟動 (速度: {req.speed}mm/s)"}
 
 @app.post("/api/move_to")
 def move_to(req: MoveToRequest):
+    logger.info(f"收到定位請求: X={req.x}, Z={req.z}, 速度={req.speed}mm/s")
     success = motion_engine.move_to(x=req.x, z=req.z, speed=req.speed)
     if not success:
         raise HTTPException(status_code=400, detail="無法執行定位移動")

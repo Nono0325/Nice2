@@ -102,7 +102,7 @@ class SystemConfig(BaseModel):
         alm_pin=25,    # Pin 22
         steps_per_rev=1600,
         pitch_mm_per_rev=5.0,    # 滾珠螺桿 5mm/rev
-        max_speed_mm_s=40.0,
+        max_speed_mm_s=80.0,
         homing_speed_mm_s=15.0,
         creep_speed_mm_s=3.0,
         accel_mm_s2=250.0,

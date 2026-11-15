@@ -278,9 +278,9 @@
               </div>
             </div>
 
-            <!-- 寸動速度 (mm/s) -->
+            <!-- 移動速度 (mm/s) - 同步適用於寸動與座標定位 -->
             <div class="control-row">
-              <span class="control-label">寸動速度:</span>
+              <span class="control-label">移動速度:</span>
               <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                 <div style="display: flex; align-items: center; gap: 4px;">
                   <input type="number" step="1" min="1" max="150" v-model.number="jogSpeed" class="form-control" style="width: 80px; text-align: center; padding: 6px 8px; font-weight: 700;">
@@ -949,7 +949,7 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=2.2.0"></script>
 </body>
 </html>
 
