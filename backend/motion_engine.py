@@ -157,121 +157,140 @@ class MotionEngine:
         threading.Thread(target=run_jog, daemon=True).start()
         return True
 
+    def move_sync(self, x: Optional[float] = None, z: Optional[float] = None, speed: Optional[float] = None) -> bool:
+        """同步絕對座標定位移動 (直到抵達或中止才返回)"""
+        if self.state in ["ESTOP", "ALARM"]:
+            return False
+        if self.motor_x.is_moving or self.motor_z.is_moving:
+            return False
+
+        logger.info(f"執行同步座標定位: X={x}mm, Z={z}mm, 設定速度={speed} mm/s")
+        prev_state = self.state
+        self.state = "MOVING"
+        try:
+            # 垂直軸安全策略：升 Z 先升，降 Z 後降
+            if z is not None and z > self.motor_z.position_mm:
+                if not self.motor_z.move_abs(z, speed_mm_s=speed):
+                    return False
+            if x is not None:
+                if not self.motor_x.move_abs(x, speed_mm_s=speed):
+                    return False
+            if z is not None and z <= self.motor_z.position_mm:
+                if not self.motor_z.move_abs(z, speed_mm_s=speed):
+                    return False
+            return True
+        finally:
+            if self.state == "MOVING":
+                self.state = prev_state if prev_state != "MOVING" else "IDLE"
+
+    def move_rel_sync(self, dx: Optional[float] = None, dz: Optional[float] = None, speed: Optional[float] = None) -> bool:
+        """同步相對增量運動"""
+        target_x = (self.motor_x.position_mm + dx) if dx is not None else None
+        target_z = (self.motor_z.position_mm + dz) if dz is not None else None
+        return self.move_sync(x=target_x, z=target_z, speed=speed)
+
     def move_to(self, x: Optional[float] = None, z: Optional[float] = None, speed: Optional[float] = None) -> bool:
-        """絕對座標定位移動 (X, Z 聯動或單動)"""
+        """非阻塞式絕對座標定位移動 (X, Z 聯動或單動)"""
         if self.state in ["ESTOP", "ALARM"]:
             return False
         if self.motor_x.is_moving or self.motor_z.is_moving:
             return False
 
         logger.info(f"啟動絕對座標定位: X={x}mm, Z={z}mm, 設定速度={speed} mm/s")
-
-        def run_move():
-            self.state = "MOVING"
-            try:
-                # 為了避免工件碰撞，若 Z 軸需要向上提升，先提升 Z，再移動 X
-                # 若 Z 軸需要向下，先移動 X 到位，再下降 Z
-                if z is not None and z > self.motor_z.position_mm:
-                    self.motor_z.move_abs(z, speed_mm_s=speed)
-                if x is not None:
-                    self.motor_x.move_abs(x, speed_mm_s=speed)
-                if z is not None and z <= self.motor_z.position_mm:
-                    self.motor_z.move_abs(z, speed_mm_s=speed)
-            finally:
-                if self.state == "MOVING":
-                    self.state = "IDLE"
-
-        threading.Thread(target=run_move, daemon=True).start()
+        threading.Thread(target=lambda: self.move_sync(x=x, z=z, speed=speed), daemon=True).start()
         return True
 
-    def start_homing(self, axes: str = "ALL"):
-        """
-        全自動原點復歸 (Auto Homing Routine)
-        安全順序：
-        1. 先歸零 Z 軸 (垂直軸上升至最高安全位置，避免手臂末端在低空橫移撞擊機構)
-        2. 再歸零 X 軸 (水平橫移至左端原點)
-        """
+    def homing_sync(self, axes: str = "ALL") -> bool:
+        """同步自動歸零程序 (直到歸零完成或中止才返回)"""
         if self.state in ["ESTOP", "ALARM", "HOMING"]:
             logger.warning(f"目前狀態為 {self.state}，無法啟動自動歸零")
             return False
 
-        def homing_routine():
-            self.state = "HOMING"
-            logger.info("=== 啟動自動原點復歸序列 (Auto Homing) ===")
-            try:
-                # 確保兩軸馬達致能鎖定
-                self.motor_x.set_enable(True)
-                self.motor_z.set_enable(True)
-                time.sleep(0.1)
+        prev_state = self.state
+        self.state = "HOMING"
+        logger.info("=== 啟動自動原點復歸序列 (Auto Homing) ===")
+        try:
+            # 確保兩軸馬達致能鎖定
+            self.motor_x.set_enable(True)
+            self.motor_z.set_enable(True)
+            time.sleep(0.1)
 
-                target_axes = axes.upper()
+            target_axes = axes.upper()
 
-                # --- 步驟 1: Z 軸歸零 (向上移動，直到碰到頂部電感式接近開關 Z_UP) ---
-                if target_axes in ["ALL", "Z"]:
-                    self.motor_z.is_homed = False
-                    logger.info(">>> 執行 Z 軸安全歸零 (向上移動，直到碰到頂部電感式接近開關 Z_UP)...")
-                    z_cfg = self.cfg.motor_z
+            # --- 步驟 1: Z 軸歸零 (向上移動，直到碰到頂部電感式接近開關 Z_UP) ---
+            if target_axes in ["ALL", "Z"]:
+                self.motor_z.is_homed = False
+                logger.info(">>> 執行 Z 軸安全歸零 (向上移動，直到碰到頂部電感式接近開關 Z_UP)...")
+                z_cfg = self.cfg.motor_z
 
-                    # 即時精準檢測頂部電感接近開關 (Z_UP)
-                    def is_z_up_hit() -> bool:
-                        if self.is_simulation:
-                            return self.motor_z.position_mm >= (z_cfg.max_limit_mm - 2.0)
-                        val = self.gpio.read_pin(self.cfg.sensors.z_up)
-                        return (val == 0) if self.cfg.sensors.active_low else (val == 1)
+                # 即時精準檢測頂部電感接近開關 (Z_UP)
+                def is_z_up_hit() -> bool:
+                    if self.is_simulation:
+                        return self.motor_z.position_mm >= (z_cfg.max_limit_mm - 2.0)
+                    val = self.gpio.read_pin(self.cfg.sensors.z_up)
+                    return (val == 0) if self.cfg.sensors.active_low else (val == 1)
 
-                    # 若初始已在頂部開關觸發狀態，先緩慢向下微退，直到脫離開關
-                    if is_z_up_hit():
-                        logger.info("Z 軸初始已在頂部開關上，先緩慢向下微退...")
-                        self.motor_z.move_rel(-1 * z_cfg.backoff_mm, speed_mm_s=z_cfg.creep_speed_mm_s, ignore_limits=True)
-                        time.sleep(0.05)
+                # 若初始已在頂部開關觸發狀態，先緩慢向下微退，直到脫離開關
+                if is_z_up_hit():
+                    logger.info("Z 軸初始已在頂部開關上，先緩慢向下微退...")
+                    self.motor_z.move_rel(-1 * z_cfg.backoff_mm, speed_mm_s=z_cfg.creep_speed_mm_s, ignore_limits=True)
+                    time.sleep(0.05)
 
-                    # 向上移動尋找開關，直到碰到開關停止
-                    max_travel = z_cfg.max_limit_mm - z_cfg.min_limit_mm + 50.0
-                    self.motor_z.move_rel(1 * max_travel, speed_mm_s=z_cfg.homing_speed_mm_s, check_stop_condition=is_z_up_hit, ignore_limits=True)
-                    if self.state == "ESTOP": return
+                # 向上移動尋找開關，直到碰到開關停止
+                max_travel = z_cfg.max_limit_mm - z_cfg.min_limit_mm + 50.0
+                self.motor_z.move_rel(1 * max_travel, speed_mm_s=z_cfg.homing_speed_mm_s, check_stop_condition=is_z_up_hit, ignore_limits=True)
+                if self.state == "ESTOP": return False
 
-                    # 設定原點座標
-                    self.motor_z.set_position_mm(z_cfg.home_offset_mm)
-                    self.motor_z.is_homed = True
-                    logger.info(f"Z 軸已觸碰頂部接近開關 (Z_UP) 停止！歸零完成，已校準座標為 {z_cfg.home_offset_mm:.2f}mm")
+                # 設定原點座標
+                self.motor_z.set_position_mm(z_cfg.home_offset_mm)
+                self.motor_z.is_homed = True
+                logger.info(f"Z 軸已觸碰頂部接近開關 (Z_UP) 停止！歸零完成，已校準座標為 {z_cfg.home_offset_mm:.2f}mm")
 
-                # --- 步驟 2: X 軸歸零 (向左移動，直到碰到左端電感式接近開關 X_LEFT) ---
-                if target_axes in ["ALL", "X"]:
-                    self.motor_x.is_homed = False
-                    logger.info(">>> 執行 X 軸歸零 (向左移動，直到碰到左端電感式接近開關 X_LEFT)...")
-                    x_cfg = self.cfg.motor_x
+            # --- 步驟 2: X 軸歸零 (向左移動，直到碰到左端電感式接近開關 X_LEFT) ---
+            if target_axes in ["ALL", "X"]:
+                self.motor_x.is_homed = False
+                logger.info(">>> 執行 X 軸歸零 (向左移動，直到碰到左端電感式接近開關 X_LEFT)...")
+                x_cfg = self.cfg.motor_x
 
-                    # 即時精準檢測左端電感接近開關 (X_LEFT)
-                    def is_x_left_hit() -> bool:
-                        if self.is_simulation:
-                            return self.motor_x.position_mm <= 2.0
-                        val = self.gpio.read_pin(self.cfg.sensors.x_left)
-                        return (val == 0) if self.cfg.sensors.active_low else (val == 1)
+                # 即時精準檢測左端電感接近開關 (X_LEFT)
+                def is_x_left_hit() -> bool:
+                    if self.is_simulation:
+                        return self.motor_x.position_mm <= 2.0
+                    val = self.gpio.read_pin(self.cfg.sensors.x_left)
+                    return (val == 0) if self.cfg.sensors.active_low else (val == 1)
 
-                    # 若初始已在左端開關觸發狀態，先緩慢向右微退，直到脫離開關
-                    if is_x_left_hit():
-                        logger.info("X 軸初始已在左端開關上，先緩慢向右微退...")
-                        self.motor_x.move_rel(1 * x_cfg.backoff_mm, speed_mm_s=x_cfg.creep_speed_mm_s, ignore_limits=True)
-                        time.sleep(0.05)
+                # 若初始已在左端開關觸發狀態，先緩慢向右微退，直到脫離開關
+                if is_x_left_hit():
+                    logger.info("X 軸初始已在左端開關上，先緩慢向右微退...")
+                    self.motor_x.move_rel(1 * x_cfg.backoff_mm, speed_mm_s=x_cfg.creep_speed_mm_s, ignore_limits=True)
+                    time.sleep(0.05)
 
-                    # 向左移動尋找開關，直到碰到開關停止
-                    max_travel = x_cfg.max_limit_mm - x_cfg.min_limit_mm + 50.0
-                    self.motor_x.move_rel(-1 * max_travel, speed_mm_s=x_cfg.homing_speed_mm_s, check_stop_condition=is_x_left_hit, ignore_limits=True)
-                    if self.state == "ESTOP": return
+                # 向左移動尋找開關，直到碰到開關停止
+                max_travel = x_cfg.max_limit_mm - x_cfg.min_limit_mm + 50.0
+                self.motor_x.move_rel(-1 * max_travel, speed_mm_s=x_cfg.homing_speed_mm_s, check_stop_condition=is_x_left_hit, ignore_limits=True)
+                if self.state == "ESTOP": return False
 
-                    # 設定原點座標
-                    self.motor_x.set_position_mm(x_cfg.home_offset_mm)
-                    self.motor_x.is_homed = True
-                    logger.info(f"X 軸已觸碰左邊接近開關 (X_LEFT) 停止！歸零完成，已校準座標為 {x_cfg.home_offset_mm:.2f}mm")
+                # 設定原點座標
+                self.motor_x.set_position_mm(x_cfg.home_offset_mm)
+                self.motor_x.is_homed = True
+                logger.info(f"X 軸已觸碰左邊接近開關 (X_LEFT) 停止！歸零完成，已校準座標為 {x_cfg.home_offset_mm:.2f}mm")
 
-                logger.info("=== 全自動歸零作業圓滿完成！===")
-            except Exception as e:
-                logger.error(f"歸零程序中斷或發生異常: {e}")
-            finally:
-                if self.state == "HOMING":
-                    self.state = "IDLE"
+            logger.info("=== 全自動歸零作業圓滿完成！===")
+            return True
+        except Exception as e:
+            logger.error(f"歸零程序中斷或發生異常: {e}")
+            return False
+        finally:
+            if self.state == "HOMING":
+                self.state = prev_state if prev_state != "HOMING" else "IDLE"
 
-        self.active_task = threading.Thread(target=homing_routine, daemon=True)
+    def start_homing(self, axes: str = "ALL") -> bool:
+        """非阻塞式自動原點復歸"""
+        if self.state in ["ESTOP", "ALARM", "HOMING"]:
+            logger.warning(f"目前狀態為 {self.state}，無法啟動自動歸零")
+            return False
+
+        self.active_task = threading.Thread(target=lambda: self.homing_sync(axes=axes), daemon=True)
         self.active_task.start()
         return True
 

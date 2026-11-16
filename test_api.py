@@ -50,7 +50,26 @@ def test_api():
     assert "雙軸龍門" in resp.text
     print("✓ GET / (前端網頁) 載入成功")
 
-    # 8. 測試關機 API
+    # 8. 測試 G-Code API
+    resp = client.post("/api/gcode/execute", json={"command": "G92 X0 Z0"})
+    assert resp.status_code == 200
+    print("✓ POST /api/gcode/execute (G92) 成功:", resp.json()["message"])
+
+    resp = client.post("/api/gcode/execute", json={"command": "M114"})
+    assert resp.status_code == 200
+    print("✓ POST /api/gcode/execute (M114) 成功:", resp.json()["response"])
+
+    resp = client.post("/api/gcode/load", json={"gcode": "G90\nG1 X15 Z10 F3000\nM3 P1\nG4 P0.1\nM5 P1\nM30"})
+    assert resp.status_code == 200
+    assert resp.json()["total_lines"] == 6
+    print("✓ POST /api/gcode/load 成功, 總行數:", resp.json()["total_lines"])
+
+    resp = client.get("/api/gcode/status")
+    assert resp.status_code == 200
+    assert "state" in resp.json()
+    print("✓ GET /api/gcode/status 成功, 當前狀態:", resp.json()["state"])
+
+    # 9. 測試關機 API
     resp = client.post("/api/system/shutdown")
     assert resp.status_code == 200
     assert resp.json()["success"] == True

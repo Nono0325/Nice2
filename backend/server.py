@@ -11,11 +11,12 @@ from pydantic import BaseModel
 from .config import config_mgr, SystemConfig
 from .motion_engine import MotionEngine
 from .system_manager import SystemManager
+from .gcode_interpreter import GCodeInterpreter
 
 logger = logging.getLogger("ControlServer")
 
 # 建立 FastAPI 實例
-app = FastAPI(title="雙軸龍門機械手臂智能控制系統", version="2.1.0")
+app = FastAPI(title="雙軸龍門機械手臂智能控制系統", version="2.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +38,7 @@ async def add_no_cache_headers(request, call_next):
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 motion_engine = MotionEngine(config_mgr)
 system_manager = SystemManager(APP_ROOT)
+gcode_engine = GCodeInterpreter(motion_engine)
 
 # WebSocket 連線管理池
 class ConnectionManager:
@@ -90,12 +92,19 @@ class SimSensorToggleRequest(BaseModel):
     sensor_name: str      # 如 "x_left", "arm_1", etc.
     active: bool
 
+class GCodeExecuteRequest(BaseModel):
+    command: str          # 單行 G-Code 指令 (例如 "G1 X50 Z20 F1500" 或 "M3 P1")
+
+class GCodeProgramRequest(BaseModel):
+    gcode: str            # 多行 G-Code 程式文本
+
 # --- RESTful API 路由 ---
 
 @app.get("/api/status")
 def get_status():
     telemetry = motion_engine.get_telemetry()
     telemetry["system"] = system_manager.get_system_stats()
+    telemetry["gcode"] = gcode_engine.get_status()
     return telemetry
 
 @app.post("/api/jog")
@@ -196,6 +205,52 @@ def sim_toggle_sensor(req: SimSensorToggleRequest):
         return {"status": "ok", "sensor": req.sensor_name, "active": req.active}
     return {"status": "error", "message": "找不到感測器引腳名稱"}
 
+# --- G-Code 自動化與指令執行路由 ---
+
+@app.post("/api/gcode/execute")
+def gcode_execute(req: GCodeExecuteRequest):
+    """即時執行單行 G-Code 指令 (MDI 模式)"""
+    logger.info(f"收到單行 G-Code 執行請求: {req.command}")
+    res = gcode_engine.execute_line(req.command)
+    return res
+
+@app.post("/api/gcode/load")
+def gcode_load(req: GCodeProgramRequest):
+    """載入多行 G-Code 腳本"""
+    res = gcode_engine.load_program(req.gcode)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+@app.post("/api/gcode/start")
+def gcode_start(req: Optional[GCodeProgramRequest] = None):
+    """啟動多行 G-Code 腳本執行 (可直接傳入 gcode 文本或執行已載入之腳本)"""
+    gcode_text = req.gcode if req and req.gcode else None
+    res = gcode_engine.start_program(gcode_text)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+@app.post("/api/gcode/pause")
+def gcode_pause():
+    """暫停目前執行之 G-Code 腳本"""
+    return gcode_engine.pause_program()
+
+@app.post("/api/gcode/resume")
+def gcode_resume():
+    """繼續目前已暫停之 G-Code 腳本"""
+    return gcode_engine.resume_program()
+
+@app.post("/api/gcode/stop")
+def gcode_stop():
+    """中斷停止目前之 G-Code 腳本"""
+    return gcode_engine.stop_program()
+
+@app.get("/api/gcode/status")
+def gcode_get_status():
+    """獲取 G-Code 引擎當前進度與狀態"""
+    return gcode_engine.get_status()
+
 # --- WebSocket 高頻遙測推播 ---
 @app.websocket("/ws/telemetry")
 async def websocket_telemetry(websocket: WebSocket):
@@ -211,12 +266,15 @@ async def websocket_telemetry(websocket: WebSocket):
                     motion_engine.jog(data.get("axis"), data.get("direction"), data.get("distance"), data.get("speed"))
                 elif cmd == "estop":
                     motion_engine.emergency_stop()
+                elif cmd == "gcode":
+                    gcode_engine.execute_line(data.get("command", ""))
             except asyncio.TimeoutError:
                 pass
             
             # 推送目前最新遙測封包 (約 15~20Hz)
             telemetry = motion_engine.get_telemetry()
             telemetry["system"] = system_manager.get_system_stats()
+            telemetry["gcode"] = gcode_engine.get_status()
             await websocket.send_json(telemetry)
             await asyncio.sleep(0.05)
     except WebSocketDisconnect:

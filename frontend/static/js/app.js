@@ -68,6 +68,20 @@ createApp({
         uptime: '--',
         platform: '--',
         python_version: '--'
+      },
+      gcode: {
+        state: 'IDLE',
+        current_line: 0,
+        total_lines: 0,
+        progress_percent: 0.0,
+        current_command: '',
+        distance_mode: 'G90',
+        feedrate: 1800.0,
+        speed_mm_s: 30.0,
+        unit: 'mm',
+        elapsed_seconds: 0.0,
+        last_error: '',
+        recent_logs: []
       }
     });
 
@@ -76,6 +90,81 @@ createApp({
     const jogSpeed = ref(30.0);    // 預設寸動速度 30 mm/s
     const customTargetX = ref(0.0);
     const customTargetZ = ref(0.0);
+
+    // G-Code 自動化控制參數
+    const quickGcodeCmd = ref('');
+    const gcodeMdiInput = ref('');
+    const selectedTemplate = ref('');
+    const gcodeLogs = ref([]);
+    const gcodeScript = ref(`; 雙軸龍門自動化示範程式 (Pick & Place)
+G90          ; 絕對座標模式
+M17          ; 鎖定全軸馬達
+G28          ; 全軸自動歸零 (Z先升後X)
+G1 Z80 F1800 ; 提升至安全高度 80mm
+G1 X150 F2400; 移動至工位 A (X=150mm)
+G1 Z25 F1200 ; 下降至拾取點
+M3 P1        ; 開啟電磁鐵 EM1 吸附
+G4 P1.0      ; 延時 1 秒確保吸附牢固
+G1 Z100 F1500; 垂直提起工件
+G1 X350 F2400; 平移至目標工位 B (X=350mm)
+G1 Z30 F1200 ; 下降至放置點
+M5 P1        ; 釋放電磁鐵 EM1 斷電脫附
+G4 P0.5      ; 延時 0.5 秒釋放
+G1 Z100 F1800; 提升至安全高度
+G1 X0 F2400  ; 返回原點待機
+M30          ; 程式正常結束
+`);
+
+    const gcodeTemplates = {
+      homing: `; 範例 1: 全軸原點歸零與校準
+M17          ; 致能鎖定全軸馬達
+G90          ; 絕對座標模式
+G28          ; 執行全軸自動原點復歸 (Z先升至頂部，後X向左碰原點)
+G1 Z50 F1200 ; 下降至安全待機高度
+M114         ; 查詢並輸出當前精確座標
+`,
+      pick_place: `; 範例 2: 工件吸附搬運示範 (Pick & Place)
+G90          ; 絕對座標模式
+M17          ; 鎖定全軸馬達
+G1 Z120 F1800; 提升至巡航安全高度 (120mm)
+G1 X120 F2400; 水平快速移動至工位 A 上方
+G1 Z25 F1200 ; 下降至工件表面
+M3 P1        ; 開啟電磁鐵 EM1 強力吸附
+G4 P1.0      ; 等待 1 秒確保吸附牢固
+G1 Z150 F1500; 垂直平穩提起工件
+G1 X380 F2400; 水平橫移至目標放置工位 B
+G1 Z30 F1200 ; 下降至放置目標高度
+M5 P1        ; 釋放電磁鐵 EM1 斷電脫附
+G4 P0.5      ; 等待工件穩定脫落
+G1 Z150 F1800; 提升至安全高度
+G1 X0 F2400  ; 返回原點待機
+M30          ; 程式正常結束
+`,
+      motion_test: `; 範例 3: 兩軸往返循跡耐久檢測
+G90          ; 絕對座標模式
+G1 X50 Z40 F1800
+G1 X250 Z40 F2400
+G1 X250 Z120 F1500
+G1 X50 Z120 F2400
+G1 X50 Z40 F1800
+M114         ; 查詢座標校對
+M30
+`,
+      matrix_scan: `; 範例 4: 8 點感測工位掃描檢測
+G90
+G1 Z100 F1800
+G1 X50 F2400
+M119         ; 讀取當前感測器
+G1 X150 F2400
+M119
+G1 X250 F2400
+M119
+G1 X350 F2400
+M119
+G1 X0 Z100 F2400
+M30
+`
+    };
 
     // 系統日誌
     const logs = ref([]);
@@ -367,6 +456,136 @@ createApp({
       return Math.min(100, Math.max(0, ((cur - min) / (max - min)) * 100));
     });
 
+    // --- G-Code 自動化控制 ---
+    const addGCodeLog = (text, status = 'ok') => {
+      const time = new Date().toLocaleTimeString();
+      gcodeLogs.value.unshift({ time, text, status });
+      if (gcodeLogs.value.length > 80) gcodeLogs.value.pop();
+    };
+
+    const getGCodeStateStyle = () => {
+      const st = telemetry.gcode ? telemetry.gcode.state : 'IDLE';
+      if (st === 'RUNNING') return { background: '#059669', color: '#fff', border: '1px solid #10b981' };
+      if (st === 'PAUSED') return { background: '#d97706', color: '#fff', border: '1px solid #f59e0b' };
+      if (st === 'COMPLETED') return { background: '#0284c7', color: '#fff', border: '1px solid #38bdf8' };
+      if (st === 'ERROR') return { background: '#dc2626', color: '#fff', border: '1px solid #ef4444' };
+      return { background: '#334155', color: '#94a3b8', border: '1px solid #475569' };
+    };
+
+    const executeGCodeLine = async (command) => {
+      if (!command || !command.trim()) return;
+      try {
+        const res = await fetch('/api/gcode/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: command.trim() })
+        });
+        const data = await res.json();
+        addGCodeLog(`${command} ➔ ${data.message || 'OK'}`, data.status || 'ok');
+        addLog(`G-Code: ${command} (${data.message || 'OK'})`, data.status === 'error' ? 'err' : 'info');
+      } catch (err) {
+        addGCodeLog(`${command} ➔ 錯誤: ${err.message}`, 'error');
+        addLog(`G-Code 指令執行失敗: ${err.message}`, 'err');
+      }
+    };
+
+    const sendQuickGcode = () => {
+      if (!quickGcodeCmd.value) return;
+      executeGCodeLine(quickGcodeCmd.value);
+      quickGcodeCmd.value = '';
+    };
+
+    const sendMdiGCode = () => {
+      if (!gcodeMdiInput.value) return;
+      executeGCodeLine(gcodeMdiInput.value);
+      gcodeMdiInput.value = '';
+    };
+
+    const sendQuickSnippet = (snippet) => {
+      executeGCodeLine(snippet);
+    };
+
+    const startGCodeProgram = async () => {
+      if (!gcodeScript.value.trim()) {
+        alert('請先輸入或載入 G-Code 腳本內容！');
+        return;
+      }
+      try {
+        const res = await fetch('/api/gcode/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gcode: gcodeScript.value })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '啟動失敗');
+        addGCodeLog('▶️ G-Code 程式已啟動自動化執行', 'ok');
+        addLog('G-Code 自動化排程開始執行', 'info');
+      } catch (err) {
+        alert('無法啟動 G-Code 程式: ' + err.message);
+        addGCodeLog(`啟動失敗: ${err.message}`, 'error');
+      }
+    };
+
+    const pauseGCodeProgram = async () => {
+      try {
+        await fetch('/api/gcode/pause', { method: 'POST' });
+        addGCodeLog('⏸️ G-Code 程式已手動暫停', 'ok');
+        addLog('G-Code 程式已暫停', 'info');
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    const resumeGCodeProgram = async () => {
+      try {
+        await fetch('/api/gcode/resume', { method: 'POST' });
+        addGCodeLog('⏯️ G-Code 程式已恢復執行', 'ok');
+        addLog('G-Code 程式恢復執行', 'info');
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    const stopGCodeProgram = async () => {
+      if (!confirm('確定要強制中斷並停止目前 G-Code 腳本執行嗎？')) return;
+      try {
+        await fetch('/api/gcode/stop', { method: 'POST' });
+        addGCodeLog('⏹️ G-Code 程式已被使用者強制中止', 'error');
+        addLog('G-Code 程式已中止', 'err');
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    const loadGCodeFile = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        gcodeScript.value = event.target.result;
+        addGCodeLog(`已從檔案載入: ${file.name} (${file.size} bytes)`, 'ok');
+        addLog(`成功載入 G-Code 檔案: ${file.name}`, 'info');
+      };
+      reader.readAsText(file);
+    };
+
+    const downloadGCodeFile = () => {
+      const blob = new Blob([gcodeScript.value], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'nice_gcode_' + new Date().toISOString().slice(0, 10) + '.gcode';
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const applyGCodeTemplate = () => {
+      const t = selectedTemplate.value;
+      if (!t || !gcodeTemplates[t]) return;
+      gcodeScript.value = gcodeTemplates[t];
+      addGCodeLog(`已載入預設範本: ${selectedTemplate.value}`, 'ok');
+    };
+
     onMounted(() => {
       initWebSocket();
       loadConfig();
@@ -385,6 +604,22 @@ createApp({
       jogSpeed,
       customTargetX,
       customTargetZ,
+      quickGcodeCmd,
+      gcodeMdiInput,
+      selectedTemplate,
+      gcodeLogs,
+      gcodeScript,
+      getGCodeStateStyle,
+      sendQuickGcode,
+      sendMdiGCode,
+      sendQuickSnippet,
+      startGCodeProgram,
+      pauseGCodeProgram,
+      resumeGCodeProgram,
+      stopGCodeProgram,
+      loadGCodeFile,
+      downloadGCodeFile,
+      applyGCodeTemplate,
       logs,
       configForm,
       isUpdating,

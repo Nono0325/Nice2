@@ -68,6 +68,9 @@
       <button class="tab-btn" :class="{ active: currentTab === 'cockpit' }" @click="currentTab = 'cockpit'">
         🎮 運動主控台
       </button>
+      <button class="tab-btn" :class="{ active: currentTab === 'gcode' }" @click="currentTab = 'gcode'">
+        📜 G-Code 自動化
+      </button>
       <button class="tab-btn" :class="{ active: currentTab === 'sensors' }" @click="currentTab = 'sensors'">
         📡 感測器與夾爪 (13+4)
       </button>
@@ -345,6 +348,18 @@
                 <button class="btn-primary" style="white-space: nowrap; padding: 9px 16px;" @click="moveToCustom">
                   移至座標
                 </button>
+              </div>
+            </div>
+
+            <!-- 即時 G-Code 單行指令 (MDI) -->
+            <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border-color);">
+              <div style="font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                <span>⚡ G-Code 即時指令 (MDI)</span>
+                <span style="font-size: 11px; color: #38bdf8; cursor: pointer; text-decoration: underline;" @click="currentTab = 'gcode'">開啟完整 G-Code 腳本編輯器 ➔</span>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" v-model="quickGcodeCmd" @keyup.enter="sendQuickGcode" class="form-control" placeholder="例: G1 X100 Z50 F1800 或 G28 或 M3 P1">
+                <button class="btn-primary" style="white-space: nowrap; padding: 9px 16px;" @click="sendQuickGcode">發送</button>
               </div>
             </div>
           </div>
@@ -952,10 +967,160 @@
           </table>
         </div>
       </div>
+
+      <!-- TAB 5: G-Code 自動化控制與程式編輯 -->
+      <div v-show="currentTab === 'gcode'">
+        <div style="display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 20px;">
+          <!-- 左側：G-Code 腳本編輯與排程控制 -->
+          <div class="card">
+            <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span class="card-title">📜 G-Code 自動化腳本編輯器</span>
+                <span class="sensor-tag" :style="getGCodeStateStyle()">
+                  {{ telemetry.gcode ? telemetry.gcode.state : 'IDLE' }}
+                </span>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <select v-model="selectedTemplate" @change="applyGCodeTemplate" class="form-control" style="width: auto; padding: 5px 10px; font-size: 12px; cursor: pointer;">
+                  <option value="">-- 載入範例程式 --</option>
+                  <option value="homing">範例 1: 全軸原點歸零與校準</option>
+                  <option value="pick_place">範例 2: 工件吸附搬運示範 (Pick & Place)</option>
+                  <option value="motion_test">範例 3: 兩軸往返循跡耐久檢測</option>
+                  <option value="matrix_scan">範例 4: 8 點感測工位掃描檢測</option>
+                </select>
+                <label class="pill-btn" style="cursor: pointer; margin: 0;">
+                  📁 載入檔案
+                  <input type="file" accept=".gcode,.nc,.txt" @change="loadGCodeFile" style="display: none;">
+                </label>
+                <button class="pill-btn" @click="downloadGCodeFile">💾 下載</button>
+                <button class="pill-btn" @click="gcodeScript = ''">🗑️ 清空</button>
+              </div>
+            </div>
+
+            <!-- G-Code 代碼編輯區 -->
+            <div style="position: relative;">
+              <textarea v-model="gcodeScript" 
+                        class="form-control" 
+                        rows="15" 
+                        style="width: 100%; font-family: 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.5; background: #0b0f17; color: #38bdf8; border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; resize: vertical;"
+                        placeholder="; 請在此輸入或貼上 G-Code 程式碼&#10;G90&#10;G28&#10;G1 X100 Z50 F1800&#10;M3 P1&#10;G4 P1.0&#10;M5 P1&#10;M30"></textarea>
+            </div>
+
+            <!-- 即時進度條與狀態 -->
+            <div style="margin-top: 14px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;">
+                <span><strong>執行進度:</strong> {{ telemetry.gcode ? telemetry.gcode.current_line : 0 }} / {{ telemetry.gcode ? telemetry.gcode.total_lines : 0 }} 行 ({{ telemetry.gcode ? telemetry.gcode.progress_percent : 0 }}%)</span>
+                <span><strong>耗時:</strong> {{ telemetry.gcode ? telemetry.gcode.elapsed_seconds : 0 }} 秒 | <strong>進給速度:</strong> F{{ telemetry.gcode ? telemetry.gcode.feedrate : 1800 }} ({{ telemetry.gcode ? telemetry.gcode.speed_mm_s : 30 }} mm/s)</span>
+              </div>
+              <div style="background: #1e293b; height: 8px; border-radius: 4px; overflow: hidden;">
+                <div style="background: linear-gradient(90deg, #0ea5e9, #10b981); height: 100%; transition: width 0.2s;" 
+                     :style="{ width: (telemetry.gcode ? telemetry.gcode.progress_percent : 0) + '%' }"></div>
+              </div>
+              <div v-if="telemetry.gcode && telemetry.gcode.current_command" style="font-size: 11px; color: #a5f3fc; margin-top: 6px; font-family: monospace;">
+                ▶ 正在執行: {{ telemetry.gcode.current_command }}
+              </div>
+              <div v-if="telemetry.gcode && telemetry.gcode.last_error" style="font-size: 11px; color: #ef4444; margin-top: 4px; font-weight: bold;">
+                ⚠️ 錯誤: {{ telemetry.gcode.last_error }}
+              </div>
+            </div>
+
+            <!-- 執行操控按鈕列 -->
+            <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;">
+              <button class="btn-primary" 
+                      style="flex: 1; padding: 12px; font-weight: 700; font-size: 14px; background: #059669; min-width: 140px;"
+                      :disabled="telemetry.gcode && telemetry.gcode.state === 'RUNNING'"
+                      @click="startGCodeProgram">
+                ▶️ 啟動自動化執行
+              </button>
+              
+              <button v-if="telemetry.gcode && telemetry.gcode.state === 'PAUSED'"
+                      class="btn-primary" 
+                      style="flex: 1; padding: 12px; font-weight: 700; font-size: 14px; background: #0284c7; min-width: 100px;"
+                      @click="resumeGCodeProgram">
+                ⏯️ 繼續執行
+              </button>
+              <button v-else
+                      class="btn-primary" 
+                      style="flex: 1; padding: 12px; font-weight: 700; font-size: 14px; background: #d97706; min-width: 100px;"
+                      :disabled="!telemetry.gcode || telemetry.gcode.state !== 'RUNNING'"
+                      @click="pauseGCodeProgram">
+                ⏸️ 暫停
+              </button>
+
+              <button class="btn-primary" 
+                      style="flex: 1; padding: 12px; font-weight: 700; font-size: 14px; background: #dc2626; min-width: 100px;"
+                      :disabled="!telemetry.gcode || (telemetry.gcode.state !== 'RUNNING' && telemetry.gcode.state !== 'PAUSED')"
+                      @click="stopGCodeProgram">
+                ⏹️ 停止中斷
+              </button>
+            </div>
+          </div>
+
+          <!-- 右側：MDI 終端機、即時日誌與常用指令速查 -->
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            <!-- MDI 單行指令終端 -->
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">💻 MDI 終端單行指令 (即發即動)</span>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" v-model="gcodeMdiInput" @keyup.enter="sendMdiGCode" class="form-control" placeholder="例: G1 X100 Z30 F1500 或 M114">
+                <button class="btn-primary" style="white-space: nowrap; padding: 8px 16px;" @click="sendMdiGCode">發送</button>
+              </div>
+
+              <!-- 常用快速指令標籤 -->
+              <div style="margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap;">
+                <button class="pill-btn" @click="sendQuickSnippet('G28')">G28 (全軸歸零)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('G90')">G90 (絕對)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('G91')">G91 (相對)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('G92 X0 Z0')">G92 X0 Z0</button>
+                <button class="pill-btn" @click="sendQuickSnippet('M3')">M3 (開全部電磁鐵)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('M5')">M5 (關全部電磁鐵)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('M17')">M17 (鎖定馬達)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('M18')">M18 (釋放馬達)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('M114')">M114 (查詢座標)</button>
+                <button class="pill-btn" @click="sendQuickSnippet('M119')">M119 (限位檢知)</button>
+              </div>
+            </div>
+
+            <!-- G-Code 執行終端輸出 -->
+            <div class="card" style="flex: 1;">
+              <div class="card-header">
+                <span class="card-title">🖥️ 終端執行回報日誌</span>
+                <button class="pill-btn" @click="gcodeLogs = []">清空</button>
+              </div>
+              <div class="console-box" style="height: 220px;">
+                <div v-for="(log, idx) in gcodeLogs" :key="idx" class="console-line">
+                  <span class="console-time">{{ log.time }}</span>
+                  <span :class="log.status === 'error' ? 'console-err' : 'console-info'">{{ log.text }}</span>
+                </div>
+                <div v-if="gcodeLogs.length === 0" style="color: #64748b; font-style: italic;">暫無 G-Code 執行記錄...</div>
+              </div>
+            </div>
+
+            <!-- 語法速查卡片 -->
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">📖 常用 G-Code 語法速查</span>
+              </div>
+              <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+                <div><strong style="color:#38bdf8;">G0 / G1 X[mm] Z[mm] F[mm/min]</strong>: 雙軸快速/切削進給定位</div>
+                <div><strong style="color:#38bdf8;">G4 P[秒或毫秒] / S[秒]</strong>: 暫停延時等待 (例: G4 P1.0)</div>
+                <div><strong style="color:#38bdf8;">G28 [X] [Z]</strong>: 自動原點歸零 (安全順序: 先升Z後歸X)</div>
+                <div><strong style="color:#38bdf8;">G90 / G91</strong>: 絕對座標 / 相對增量座標模式切換</div>
+                <div><strong style="color:#38bdf8;">G92 X[mm] Z[mm]</strong>: 重設目前軟體座標 (座標偏置校正)</div>
+                <div><strong style="color:#38bdf8;">M3 [P通道] / M5 [P通道]</strong>: 開啟/關閉電磁鐵 (例: M3 P1 吸附)</div>
+                <div><strong style="color:#38bdf8;">M17 / M18</strong>: 致能鎖定 / 離合釋放全軸馬達</div>
+                <div><strong style="color:#38bdf8;">M114 / M119</strong>: 即時查詢當前座標 / 極限開關狀態</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=2.3.0"></script>
+  <script src="/static/js/app.js?v=2.4.0"></script>
 </body>
 </html>
 
