@@ -38,6 +38,11 @@ if command -v pigpiod &> /dev/null; then
     sudo systemctl restart pigpiod 2>/dev/null || true
 fi
 
+echo "=== [3.5/4] 設定電磁鐵開機硬體低電位鎖定 (Boot Clamp & UART TX Fix) ==="
+if [ -f "${CURRENT_DIR}/scripts/fix_boot_electromagnets.sh" ]; then
+    bash "${CURRENT_DIR}/scripts/fix_boot_electromagnets.sh" || true
+fi
+
 echo "=== [4/4] 註冊 systemd 自動開機啟動服務 ==="
 SERVICE_FILE="/etc/systemd/system/gantry-control.service"
 

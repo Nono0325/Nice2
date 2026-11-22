@@ -650,6 +650,50 @@
           </div>
         </div>
 
+        <!-- 電磁鐵開機防跳動/防誤導通保護設定 -->
+        <div class="card" style="margin-top: 16px;">
+          <div class="card-header">
+            <span class="card-title">⚡ 電磁鐵開機防跳動/防誤通電保護 (Boot Electromagnet Clamp Fix)</span>
+            <span :style="{
+              padding: '4px 10px',
+              borderRadius: '12px',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              background: bootClampStatus.is_fixed ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+              color: bootClampStatus.is_fixed ? '#10b981' : '#f59e0b',
+              border: bootClampStatus.is_fixed ? '1px solid #10b981' : '1px solid #f59e0b'
+            }">
+              {{ bootClampStatus.is_fixed ? '✅ 已啟用 Bootloader 硬體鎖定' : '⚠️ 尚未配置 (開機通電跳動)' }}
+            </span>
+          </div>
+
+          <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 16px;">
+            <p style="margin-bottom: 6px;"><strong>🔍 電磁鐵開機通電原因診斷：</strong></p>
+            <ul style="margin: 0 0 12px 20px;">
+              <li><strong style="color: #60a5fa;">磁鐵 2 (GPIO 14 / Pin 8) 開機吸合 3~5 秒</strong>：樹莓派預設啟用 UART0 TXD 輸出開機序列日誌，串口空閒狀態為 3.3V 高電平，導致 PC817 光耦在開機時導通。</li>
+              <li><strong style="color: #f87171;">磁鐵 4 (GPIO 2 / Pin 3) 開機吸合 10~15 秒</strong>：樹莓派主板上針對 I2C SDA 腳位<strong>焊接了 1.8 kΩ 物理上拉電阻至 3.3V</strong>，只要通電即處於高電位，直到 Linux 與 Python 控制程式啟動完成才能主動拉低。</li>
+            </ul>
+            <p style="margin-bottom: 6px;"><strong>🛠️ 徹底解決方案：</strong></p>
+            <p>
+              透過在樹莓派 Bootloader 開機配置 (<code>config.txt</code>) 寫入 <code>enable_uart=0</code> 與 <code>gpio=2,4,14,15=op,dl</code>，
+              樹莓派在<strong>通電開機 0.1 秒內（韌體階段）</strong>即會由硬體 GPIO 控制器強制將所有電磁鐵腳位鎖定為推挽輸出低電位 (0V)，消除 GPIO 2 物理上拉與 GPIO 14 串口高電平，從通電瞬間起徹底杜絕誤動作！
+            </p>
+          </div>
+
+          <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+            <button class="btn-primary" :disabled="bootClampStatus.loading" @click="runFixBootElectromagnets" style="background: linear-gradient(135deg, #2563eb, #7c3aed);">
+              {{ bootClampStatus.loading ? '⏳ 正在寫入 Bootloader 設定...' : '⚡ 一鍵修復開機通電問題 (套用 Bootloader 硬體低電位鎖定)' }}
+            </button>
+            <button class="btn-home-sub" :disabled="bootClampStatus.loading" @click="fetchBootClampStatus">
+              🔄 重新整理檢測開機配置狀態
+            </button>
+          </div>
+
+          <div v-if="bootClampResult" style="margin-top: 14px; background: #0d121c; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); font-family: monospace; font-size: 13px; white-space: pre-wrap;">
+            {{ bootClampResult }}
+          </div>
+        </div>
+
         <!-- 樹梅派 4 實體 40-Pin 排針視覺接腳圖 -->
         <div class="card">
           <div class="card-header">

@@ -190,6 +190,16 @@ def reboot_system():
 def shutdown_system():
     return system_manager.shutdown_system()
 
+@app.get("/api/system/boot_electromagnets_status")
+def get_boot_electromagnets_status():
+    """查詢電磁鐵開機防跳動保護配置狀態"""
+    return system_manager.check_boot_electromagnets()
+
+@app.post("/api/system/fix_boot_electromagnets")
+def fix_boot_electromagnets():
+    """執行一鍵修復電磁鐵開機跳動 (套用 Bootloader 低電位鎖定)"""
+    return system_manager.fix_boot_electromagnets()
+
 @app.post("/api/sim/sensor")
 def sim_toggle_sensor(req: SimSensorToggleRequest):
     """供模擬測試時由前端手動點擊切換接近開關狀態"""

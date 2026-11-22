@@ -75,6 +75,17 @@ def test_api():
     assert resp.json()["success"] == True
     print("✓ POST /api/system/shutdown 成功:", resp.json()["message"])
 
+    # 10. 測試電磁鐵開機硬體防跳動狀態與修復 API
+    resp = client.get("/api/system/boot_electromagnets_status")
+    assert resp.status_code == 200
+    assert "is_fixed" in resp.json()
+    print("✓ GET /api/system/boot_electromagnets_status 成功:", resp.json()["message"])
+
+    resp = client.post("/api/system/fix_boot_electromagnets")
+    assert resp.status_code == 200
+    assert "success" in resp.json()
+    print("✓ POST /api/system/fix_boot_electromagnets 成功:", resp.json()["message"])
+
     print("\n===============================")
     print("所有 Web API 路由測試 100% 通過！")
     print("===============================")

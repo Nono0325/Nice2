@@ -439,6 +439,39 @@ M30
       }
     };
 
+    // --- 電磁鐵開機硬體防跳動保護 ---
+    const bootClampStatus = ref({ is_fixed: false, message: '', loading: false });
+    const bootClampResult = ref('');
+
+    const fetchBootClampStatus = async () => {
+      try {
+        const res = await fetch('/api/system/boot_electromagnets_status');
+        const data = await res.json();
+        bootClampStatus.value.is_fixed = !!data.is_fixed;
+        bootClampStatus.value.message = data.message || '';
+      } catch (err) {
+        console.error('查詢開機電磁鐵配置狀態失敗:', err);
+      }
+    };
+
+    const runFixBootElectromagnets = async () => {
+      if (!confirm('即將自動修改樹梅派 config.txt 與系統開機設定：\n1. 將 GPIO 2, 4, 14, 15 設定為 Bootloader 早期推挽低電位鎖定 (op, dl)\n2. 關閉 UART 序列控制台 (enable_uart=0)\n\n確定立即套用修復嗎？')) return;
+      bootClampStatus.value.loading = true;
+      bootClampResult.value = '正在執行開機鎖定修復腳本...';
+      try {
+        const res = await fetch('/api/system/fix_boot_electromagnets', { method: 'POST' });
+        const data = await res.json();
+        bootClampResult.value = data.message || (data.success ? '修復設定套用成功！' : '修復失敗');
+        addLog(`電磁鐵開機硬體鎖定修復: ${data.success ? '成功' : '失敗'}`, data.success ? 'info' : 'err');
+        await fetchBootClampStatus();
+      } catch (err) {
+        bootClampResult.value = `執行修復失敗: ${err.message}`;
+        addLog(bootClampResult.value, 'err');
+      } finally {
+        bootClampStatus.value.loading = false;
+      }
+    };
+
     // 計算 X 軸和 Z 軸的行程進度百分比 (用於條狀指示)
     const xProgressPercent = computed(() => {
       const min = telemetry.motor_x.min_limit_mm;
@@ -589,6 +622,7 @@ M30
     onMounted(() => {
       initWebSocket();
       loadConfig();
+      fetchBootClampStatus();
       addLog('控制系統前端初始化就緒', 'info');
     });
 
@@ -624,6 +658,10 @@ M30
       configForm,
       isUpdating,
       updateResult,
+      bootClampStatus,
+      bootClampResult,
+      fetchBootClampStatus,
+      runFixBootElectromagnets,
       xProgressPercent,
       zProgressPercent,
       sendJog,

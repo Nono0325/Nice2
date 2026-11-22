@@ -115,6 +115,34 @@ HBS57H 與 HB808C 均支援 3.3V ~ 5V 信號電平：
   * 二極體陰極（有白色標線端）接電磁鐵正極 (+12V/24V)
   * 二極體陽極接電磁鐵負極 (MOS/繼電器開關端)
 
+### ⚠️ 重要：開機防跳動/防誤導通保護機制 (Boot Clamp & UART TX Fix)
+在樹莓派硬體特性中，部分 GPIO 在開機階段具有特殊行為：
+1. **電磁鐵 2 (GPIO 14 / Pin 8) 插電開機吸合 3~5 秒後關閉**：
+   * **硬體原因**：GPIO 14 為樹莓派晶片硬體 UART0 TXD 腳位。樹莓派開機時，韌體與 Linux 核心預設透過此腳位輸出開機日誌（Serial Console 115200bps），且 UART 閒置電位為 3.3V 高電平。PC817 光耦因高電平導通，使電磁鐵 2 誤吸合數秒，直到核心釋放或 Python 控制服務啟動將其拉低。
+2. **電磁鐵 4 (GPIO 2 / Pin 3) 插電開機吸合 10~15 秒後關閉**：
+   * **硬體原因**：GPIO 2 為 I2C1 SDA 腳位，樹莓派 PCB 板載**永久焊接了 1.8 kΩ 物理上拉電阻至 3.3V**。只要一插上電源，GPIO 2 隨時輸出 3.3V，持續維持通電，直到 Linux 開機完成、systemd 啟動 Python 控制服務執行 `gpio.setup_pin_output(2, initial_state=0)`（約需 10~15 秒），SoC 的推挽輸出才主動將其拉低為 0V 關閉電磁鐵。
+
+#### 🛠️ 官方硬體鎖定解決方案：
+樹莓派 4 支援 Bootloader (EEPROM) 早期腳位重定義，只需在 `/boot/firmware/config.txt`（舊版為 `/boot/config.txt`）加入：
+```ini
+# 關閉 UART 控制台，防止 GPIO 14 (EM2) 輸出高電位
+enable_uart=0
+
+# 開機瞬間 (<0.1s 韌體階段) 強制將電磁鐵 GPIO 鎖定為推挽輸出低電位 (Output Drive Low)
+# 瞬間克服 GPIO 2 (EM4) 的 1.8kΩ 物理上拉電阻，杜絕開機誤吸合
+gpio=2,4,14,15=op,dl
+```
+並於 `/boot/firmware/cmdline.txt` 中移除 `console=serial0,115200` 串口控制台。
+
+#### 🚀 快速一鍵套用方式：
+- **方式一（Web 網頁控制台）**：前往網頁「系統維護與更新」Tab，點擊「⚡ 一鍵修復開機通電問題 (套用 Bootloader 硬體低電位鎖定)」。
+- **方式二（SSH 終端機指令）**：在樹莓派終端機執行：
+  ```bash
+  cd ~/Nice2
+  sudo bash scripts/fix_boot_electromagnets.sh
+  ```
+  執行後下次插電或重新開機，電磁鐵 2 與 4 將完全不再有任何通電跳動現象！
+
 ---
 
 ## 6. 上電與調校標準程序
