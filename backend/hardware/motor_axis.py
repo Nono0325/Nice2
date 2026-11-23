@@ -92,9 +92,21 @@ class MotorAxis:
 
         # 軟體行程限制保護 (已歸零狀態下強制校驗，歸零尋點動作可略過)
         if self.is_homed and not ignore_limits:
-            if target_mm < self.cfg.min_limit_mm or target_mm > self.cfg.max_limit_mm:
-                logger.error(f"[{self.cfg.name}] 目標位置 {target_mm:.2f}mm 超出軟體行程保護範圍 [{self.cfg.min_limit_mm}, {self.cfg.max_limit_mm}]mm！")
-                return False
+            cur_pos = self.position_mm
+            is_below_min = target_mm < self.cfg.min_limit_mm
+            is_above_max = target_mm > self.cfg.max_limit_mm
+
+            if is_below_min or is_above_max:
+                # 容錯修復機制：若目前位置因故已處於邊界外，且新指令正在朝向合法安全範圍靠近，則允許運動以便脫困
+                moving_towards_safe = False
+                if is_above_max and cur_pos > self.cfg.max_limit_mm and target_mm < cur_pos:
+                    moving_towards_safe = True
+                elif is_below_min and cur_pos < self.cfg.min_limit_mm and target_mm > cur_pos:
+                    moving_towards_safe = True
+
+                if not moving_towards_safe:
+                    logger.error(f"[{self.cfg.name}] 目標位置 {target_mm:.2f}mm 超出軟體行程保護範圍 [{self.cfg.min_limit_mm}, {self.cfg.max_limit_mm}]mm！")
+                    return False
 
         target_steps = int(round(target_mm * self.cfg.steps_per_mm))
         delta_steps = target_steps - self.position_steps

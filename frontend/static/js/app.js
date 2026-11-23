@@ -32,7 +32,7 @@ createApp({
         steps_per_mm: 320.0,
         max_speed: 40.0,
         min_limit_mm: 0.0,
-        max_limit_mm: 300.0
+        max_limit_mm: 30.0
       },
       sensors: {
         x_left: false,

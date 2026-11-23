@@ -107,10 +107,10 @@ class SystemConfig(BaseModel):
         creep_speed_mm_s=3.0,
         accel_mm_s2=250.0,
         min_limit_mm=0.0,
-        max_limit_mm=300.0,
+        max_limit_mm=30.0,
         home_direction=1,        # 向上歸零 (安全高度)
-        home_offset_mm=300.0,    # 頂端為 300.0mm (或0.0mm視習慣)
-        backoff_mm=5.0
+        home_offset_mm=30.0,     # 頂端為 30.0mm (預設 0~30mm 行程)
+        backoff_mm=3.0
     ))
     
     sensors: SensorPinConfig = Field(default_factory=SensorPinConfig)
@@ -126,7 +126,16 @@ class ConfigManager:
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    return SystemConfig(**data)
+                    cfg = SystemConfig(**data)
+                    # 自動防禦修正：若 Z 軸 home_offset_mm 超出 max_limit_mm (例如舊版殘留 300mm，或 max_limit_mm 設定為 30mm)
+                    # 自動校正為 max_limit_mm，防止歸零後座標超標導致上下無法動作
+                    if cfg.motor_z.home_direction == 1:
+                        if cfg.motor_z.home_offset_mm > cfg.motor_z.max_limit_mm or cfg.motor_z.home_offset_mm == 300.0:
+                            cfg.motor_z.home_offset_mm = cfg.motor_z.max_limit_mm
+                    if cfg.motor_x.home_direction == -1:
+                        if cfg.motor_x.home_offset_mm < cfg.motor_x.min_limit_mm:
+                            cfg.motor_x.home_offset_mm = cfg.motor_x.min_limit_mm
+                    return cfg
             except Exception as e:
                 print(f"[ConfigManager] 讀取設定檔失敗，將建立預設設定: {e}")
         cfg = SystemConfig()
@@ -135,6 +144,13 @@ class ConfigManager:
 
     def save(self, cfg: SystemConfig = None) -> bool:
         if cfg is not None:
+            # 儲存前確保 home_offset_mm 不會超過極限範圍
+            if cfg.motor_z.home_direction == 1:
+                if cfg.motor_z.home_offset_mm > cfg.motor_z.max_limit_mm or cfg.motor_z.home_offset_mm == 300.0:
+                    cfg.motor_z.home_offset_mm = cfg.motor_z.max_limit_mm
+            if cfg.motor_x.home_direction == -1:
+                if cfg.motor_x.home_offset_mm < cfg.motor_x.min_limit_mm:
+                    cfg.motor_x.home_offset_mm = cfg.motor_x.min_limit_mm
             self.config = cfg
         try:
             with open(self.filepath, "w", encoding="utf-8") as f:

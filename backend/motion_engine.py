@@ -66,8 +66,8 @@ class MotionEngine:
                     self.gpio.set_sim_input(self.cfg.sensors.x_mid, sim_mid)
                     self.gpio.set_sim_input(self.cfg.sensors.x_right, sim_right)
 
-                    # Z軸模擬開關觸發 (Down: <= 2mm, Up: >= 298mm)
-                    sim_down = active_val if self.motor_z.position_mm <= 2.0 else inactive_val
+                    # Z軸模擬開關觸發 (Down: <= min + 2mm, Up: >= max - 2mm)
+                    sim_down = active_val if self.motor_z.position_mm <= (self.cfg.motor_z.min_limit_mm + 2.0) else inactive_val
                     sim_up = active_val if self.motor_z.position_mm >= (self.cfg.motor_z.max_limit_mm - 2.0) else inactive_val
                     self.gpio.set_sim_input(self.cfg.sensors.z_down, sim_down)
                     self.gpio.set_sim_input(self.cfg.sensors.z_up, sim_up)
@@ -241,10 +241,18 @@ class MotionEngine:
                 self.motor_z.move_rel(1 * max_travel, speed_mm_s=z_cfg.homing_speed_mm_s, check_stop_condition=is_z_up_hit, ignore_limits=True)
                 if self.state == "ESTOP": return False
 
-                # 設定原點座標
-                self.motor_z.set_position_mm(z_cfg.home_offset_mm)
+                # 設定原點座標 (若為頂部歸零 home_direction == 1，校準為 max_limit_mm，防止舊設定殘留 300mm 超標鎖死)
+                homed_pos_z = z_cfg.home_offset_mm
+                if z_cfg.home_direction == 1:
+                    if homed_pos_z > z_cfg.max_limit_mm or homed_pos_z < z_cfg.min_limit_mm or homed_pos_z == 0.0 or homed_pos_z == 300.0:
+                        homed_pos_z = z_cfg.max_limit_mm
+                else:
+                    if homed_pos_z < z_cfg.min_limit_mm or homed_pos_z > z_cfg.max_limit_mm:
+                        homed_pos_z = z_cfg.min_limit_mm
+
+                self.motor_z.set_position_mm(homed_pos_z)
                 self.motor_z.is_homed = True
-                logger.info(f"Z 軸已觸碰頂部接近開關 (Z_UP) 停止！歸零完成，已校準座標為 {z_cfg.home_offset_mm:.2f}mm")
+                logger.info(f"Z 軸已觸碰頂部接近開關 (Z_UP) 停止！歸零完成，已校準座標為 {homed_pos_z:.2f}mm")
 
             # --- 步驟 2: X 軸歸零 (向左移動，直到碰到左端電感式接近開關 X_LEFT) ---
             if target_axes in ["ALL", "X"]:
@@ -271,9 +279,17 @@ class MotionEngine:
                 if self.state == "ESTOP": return False
 
                 # 設定原點座標
-                self.motor_x.set_position_mm(x_cfg.home_offset_mm)
+                homed_pos_x = x_cfg.home_offset_mm
+                if x_cfg.home_direction == -1:
+                    if homed_pos_x < x_cfg.min_limit_mm or homed_pos_x > x_cfg.max_limit_mm:
+                        homed_pos_x = x_cfg.min_limit_mm
+                else:
+                    if homed_pos_x > x_cfg.max_limit_mm or homed_pos_x < x_cfg.min_limit_mm:
+                        homed_pos_x = x_cfg.max_limit_mm
+
+                self.motor_x.set_position_mm(homed_pos_x)
                 self.motor_x.is_homed = True
-                logger.info(f"X 軸已觸碰左邊接近開關 (X_LEFT) 停止！歸零完成，已校準座標為 {x_cfg.home_offset_mm:.2f}mm")
+                logger.info(f"X 軸已觸碰左邊接近開關 (X_LEFT) 停止！歸零完成，已校準座標為 {homed_pos_x:.2f}mm")
 
             logger.info("=== 全自動歸零作業圓滿完成！===")
             return True

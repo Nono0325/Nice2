@@ -56,7 +56,16 @@ def test_all():
     print(f"歸零完成後狀態: state={engine.state}, X={engine.motor_x.position_mm:.2f}mm, Z={engine.motor_z.position_mm:.2f}mm")
     assert engine.motor_x.is_homed == True
     assert engine.motor_z.is_homed == True
-    print("✓ 自動歸零序列測試通過！")
+    assert engine.motor_z.position_mm <= engine.cfg.motor_z.max_limit_mm, f"Z 座標 {engine.motor_z.position_mm} 超出上限 {engine.cfg.motor_z.max_limit_mm}"
+    assert abs(engine.motor_z.position_mm - 30.0) < 0.5, f"Z 座標應為 30.0mm，實際為 {engine.motor_z.position_mm}"
+    print("✓ 自動歸零序列測試通過！Z 軸成功校準為 30.0mm (無超出行程限制)")
+
+    # 驗證歸零後 Z 軸能正常向下運動
+    z_homed_pos = engine.motor_z.position_mm
+    engine.jog("Z", -1, 5.0, speed_mm_s=20.0)
+    time.sleep(0.4)
+    assert engine.motor_z.position_mm < z_homed_pos, "歸零後 Z 軸向下運動受阻！"
+    print(f"✓ 歸零後 Z 軸向下運動測試成功！新位置: {engine.motor_z.position_mm:.2f}mm")
 
     print("\n[TEST 6] 測試 13 顆接近開關讀取...")
     sensors = engine.sensor_monitor.read_all()
